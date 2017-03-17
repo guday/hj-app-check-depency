@@ -1,0 +1,19 @@
+{
+  "name": "hj-app-check-depency",
+  "version": "1.0.0",
+  "description": "微众银行--火鸡项目--依赖检查",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/guday/hj-app-check-depency.git"
+  },
+  "author": "小明",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/guday/hj-app-check-depency/issues"
+  },
+  "homepage": "https://github.com/guday/hj-app-check-depency"
+}
