@@ -59,11 +59,18 @@ module.exports = function (source) {
         filterConfig.exclude = this.query.exclude
     }
     providerArr = this.query.config && this.query.config.appAllServices || [];
-    prefix = this.query.config && this.query.config.prefix || {
+    var _prefix = this.query.config && this.query.config.prefix || {
             "this": true,
             "that": true,
             "self": true,
         };
+
+    prefix = {};
+    for (var i in _prefix) {
+        prefix[i] = true;
+        prefix["(" + i] = true;
+        prefix["[" + i] = true;
+    }
 
     //按过滤进行处理
     var releavePath = path.relative(this.options.context, this.resourcePath);
@@ -159,17 +166,6 @@ function _matchAllInject(source, injectArr, unInjectServices) {
         injectObj[injectArr[i]] = true;
     }
 
-    var regMatchInject = injectArr.map(function (item) {
-        var str = item + "";
-        //特殊字符转换
-        str = str.replace("$", "\\$");
-
-        //正则包装  匹配所有包含该字符串的字段。 但是前缀不能为=
-        str = "([^\\s=]*" + str + "[^\\s]*)";
-        return str;
-    }).join("|");
-
-
     var collectError = _collectError;
     var reportError = _reportError;
     var errorArr = [];
@@ -179,114 +175,140 @@ function _matchAllInject(source, injectArr, unInjectServices) {
         "3": "似乎该服务未注入呢"
     };
 
-    //生产最终正则
-    // var regMatchInject = regMatchArr.join("");
-    // var regMatchInject = /([^\s]*\bcache\b[^\s]*)|([^\s]*\bGLOBAL_CONSTANT\b[^\s]*)/g
+    if (injectArr.length > 0) {
+        var regMatchInject = injectArr.map(function (item) {
+            var str = item + "";
+            //特殊字符转换
+            str = str.replace("$", "\\$");
 
-    // console.log(regMatchInject);
-    // regMatchInject = "([^\\s]*\\bcache\\b[^\\s]*)"
+            //正则包装  匹配所有包含该字符串的字段。 但是前缀不能为=
+            str = "([^\\s=,\\(]*" + str + "[^\\s,]*)";
+            return str;
+        }).join("|");
 
-    //去掉注释  //
-    source = source.replace(/\/\/.*/g, function (matchStr) {
-        // console.log("注释1: " + matchStr)
-        return "";
-    });
-    //去掉注释  /*  */
-    source = source.replace(/\/\*(\n|.)*?\*\//g, function (matchStr) {
-        // console.log("注释2: " + matchStr)
-        return "";
-    });
 
-    //对注入的服务，进行引用检查
-    source.replace(new RegExp(regMatchInject, "g"), function () {
-        var arg = arguments;
-        for (var i = 1, len = arg.length; i < len - 2; i++) {
-            var item = arg[i];
-            //取有效的匹配
-            if (item && (item = item.trim())) {
-                var arr = item.split(".");
 
-                //处理.去调用子函数: this.serviceA.funcB
-                if (arr.length > 1) {
-                    // console.log(i + ":" + item)
-                    var prefixStr = arr[0];
-                    if (!prefix[prefixStr]) {
-                        //报错
-                        collectError({
-                            dstStr: item,
-                            type: 1
-                        })
-                    }
 
-                } else {
+        //生产最终正则
+        // var regMatchInject = regMatchArr.join("");
+        // var regMatchInject = /([^\s]*\bcache\b[^\s]*)|([^\s]*\bGLOBAL_CONSTANT\b[^\s]*)/g
 
-                    var prefixStr = "";
-                    //处理[]调用子函数: this.serviceA[funcB]
-                    arr = item.split("[");
+        // console.log("info:", regMatchInject);
+        // regMatchInject = "([^\\s]*\\bcache\\b[^\\s]*)"
+
+        //去掉注释  //
+        source = source.replace(/\/\/.*/g, function (matchStr) {
+            // console.log("注释1: " + matchStr)
+            return "";
+        });
+        //去掉注释  /*  */
+        source = source.replace(/\/\*(\n|.)*?\*\//g, function (matchStr) {
+            // console.log("注释2: " + matchStr)
+            return "";
+        });
+
+        //对注入的服务，进行引用检查
+        source.replace(new RegExp(regMatchInject, "g"), function () {
+            var arg = arguments;
+            for (var i = 1, len = arg.length; i < len - 2; i++) {
+                var item = arg[i];
+                // console.log(item)
+                //取有效的匹配
+                if (item && (item = item.trim())) {
+                    var arr = item.split(".");
+                    // console.log(":", item)
+                    //处理.去调用子函数: this.serviceA.funcB
                     if (arr.length > 1) {
-                        prefixStr = arr[0];
-                    } else {
-                        //处理直接调用
-                        arr = item.split("(");
-                        if (arr.length > 1) {
-                            prefixStr = arr[0];
-                        } else {
-                            //处理单独引用
-                            arr = item.split(/'|"/);
-                            if (arr.length > 1) {
-                                //字符串类型，不管了
-                            } else {
-                                //单独引用，报错
-                                collectError({
-                                    dstStr: item,
-                                    type: 2
-                                })
-                            }
-                        }
-                    }
-
-                    if (prefixStr) {
+                        // console.log(i + ":" + item)
+                        var prefixStr = arr[0].trim();
                         if (!prefix[prefixStr]) {
+                            // console.log(arr)
+
                             //报错
                             collectError({
                                 dstStr: item,
                                 type: 1
                             })
                         }
+
+                    } else {
+
+                        var prefixStr = "";
+                        //处理[]调用子函数: this.serviceA[funcB]
+                        arr = item.split("[");
+                        if (arr.length > 1) {
+                            prefixStr = arr[0];
+                        } else {
+                            //处理直接调用
+                            arr = item.split("(");
+                            if (arr.length > 1) {
+                                prefixStr = arr[0];
+                            } else {
+                                //处理单独引用
+                                arr = item.split(/'|"/);
+                                if (arr.length > 1) {
+                                    //字符串类型，不管了
+                                } else {
+                                    //单独引用，报错
+                                    // console.log(item)
+                                    collectError({
+                                        dstStr: item,
+                                        type: 2
+                                    })
+                                }
+                            }
+                        }
+
+                        if (prefixStr) {
+                            if (!prefix[prefixStr]) {
+                                //报错
+                                console.log("：", arr)
+                                // console.log("：", item)
+                                collectError({
+                                    dstStr: item,
+                                    type: 1
+                                })
+                            }
+                        }
+
                     }
 
                 }
-
             }
-        }
-    });
+        });
 
 
-    var regUnInject = unInjectServices.map(function (item) {
-        var str = item + "";
-        //特殊字符转换
-        str = str.replace("$", "\\$");
+    }
 
-        //正则包装  匹配所有包含该字符串的字段。 但是前缀不能为=
-        str = "([\\n\\.\\s\\[=]{1}" + str + "[\\n\\.\\s\\[\\]]{1})";
-        return str;
-    }).join("|");
+    if (unInjectServices.length > 0) {
+        var regUnInject = unInjectServices.map(function (item) {
+            var str = item + "";
+            //特殊字符转换
+            str = str.replace("$", "\\$");
 
-    //对未注入的服务，看下是否有引用，如果有引用，那必须报告 未注入错误
-    source.replace(new RegExp(regUnInject, "g"), function () {
-        var arg = arguments;
-        for (var i = 1, len = arg.length; i < len - 2; i++) {
-            var item = arg[i];
-            //取有效的匹配
-            if (item && (item = item.trim())) {
-                // console.log('err:' + item)
-                collectError({
-                    dstStr: item,
-                    type: 3
-                })
+            //正则包装  匹配所有包含该字符串的字段。 但是前缀不能为=
+            str = "([\\n\\.\\s\\[=]{1}" + str + "[\\n\\.\\s\\[\\]]{1})";
+            return str;
+        }).join("|");
+
+        // console.log('unReg:', regUnInject);
+        //对未注入的服务，看下是否有引用，如果有引用，那必须报告 未注入错误
+        source.replace(new RegExp(regUnInject, "g"), function () {
+            var arg = arguments;
+            for (var i = 1, len = arg.length; i < len - 2; i++) {
+                var item = arg[i];
+                //取有效的匹配
+                if (item && (item = item.trim())) {
+                    // console.log('err:' + item)
+                    collectError({
+                        dstStr: item.split('.').join(" "),
+                        type: 3
+                    })
+                }
             }
-        }
-    });
+        });
+    }
+
 
     reportError();
 
@@ -296,16 +318,35 @@ function _matchAllInject(source, injectArr, unInjectServices) {
     }
 
     function _reportError() {
+        var type3Error = {};
+        var type3Arr = [];
         if (errorArr.length > 0) {
             var errorStr = "\n" + path.relative(that.options.context, that.resourcePath)
                 + "\n"
-            var arr = errorArr.map(function (item, i) {
+            var arr = errorArr.filter(function (item, i) {
+                if(item.type == 3) {
+                    var str = item.dstStr.trim();
+                    if (!type3Error[str]) {
+                        type3Arr.push(str)
+                        type3Error[str] = true;
+                    }
+
+                    return false;
+                } else {
+                    return true;
+                }
+            })
+             arr = arr.map(function (item, i) {
                 return (i + 1) + ": " + (errorMap[item.type] || "") + "\n" + item.dstStr;
 
             });
 
-            errorStr += arr.join("\n") + "\n"
+            errorStr += arr.join("\n") + "\n";
 
+
+            errorStr += type3Arr.map(function (item, i) {
+                return "'" + item  + "'";
+            }).join(", ");
             showDepencyMsg(errorStr)
         }
 
