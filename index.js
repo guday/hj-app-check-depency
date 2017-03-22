@@ -5,6 +5,7 @@ var t = require("babel-types");
 
 var path = require("path");
 var fs = require("fs");
+var util = require('util');
 var appTools = require("hj-app-tools");
 
 var that;
@@ -12,14 +13,21 @@ var filterConfig = {
     enclude: []
 };
 
-
-var injectArr = [];
 var oldInject = null;
 var providerArr = [];
 var defaultProviderObj = {};
 var prefix;
 var logPath;
 
+var scopeBlockFalseMap = {
+    "FunctionExpression": true,
+    "ObjectMethod": true
+};
+
+// var scopeBlockFalseMap = {
+//     "ObjectMethod": true,
+//     "ObjectMethod": true,
+// }
 /**
  * 入口函数
  * @param source
@@ -92,6 +100,7 @@ function mainCheck(source) {
     }
 
     // console.log(JSON.stringify(ast))
+    // return ;
 
     traverse(ast, {
         //直接调用的表达式
@@ -110,17 +119,32 @@ function mainCheck(source) {
 
         MemberExpression: {
             exit(path) {
-     
+
                 var node = path.node;
                 var nodeName = node.property && node.property.name;
                 if (allInject.obj.hasOwnProperty(nodeName)) {
                     // console.log(nodeName)
                     //匹配到依赖
                     var beforeNode = node.object;
-                  
+
                     switch (beforeNode.type) {
                         case "ThisExpression":
                             //this，大概率没问题
+                            // if (nodeName == "HJactionLoading") {
+                            //     console.log("=>", JSON.stringify(node))
+                            //     console.log("=>", util.inspect(path.scope.bindings))
+                            // }
+                            //在作用域上向上一级遍历，直到找到根class
+                            if (!deepThisScope(path.scope)) {
+                                //this作用域并未指向根部，报错
+                                collectError({
+                                    type: "injectError",
+                                    node: node,
+                                    value: "this作用域不对",
+                                    dst: nodeName
+                                })
+                            }
+
                             break;
                         case "MemberExpression":
                             //多级引用，报错
@@ -132,16 +156,25 @@ function mainCheck(source) {
                             })
                             break;
                         case "Identifier":
-                            var beforeNode = node.object;
-                            if (!prefix[beforeNode.name]) {
-                                //前缀有可能有问题，报告错误
+                            var beforeName = node.object && node.object.name;
+
+                            if(!deepSelfScope(beforeName, path.scope)) {
                                 collectError({
                                     type: "injectError",
                                     node: node,
-                                    value: "引用前缀不对: ",
+                                    value: "引用前缀未申明: ",
                                     dst: nodeName
                                 })
                             }
+                            break;
+                        default :
+                            //这里是异常情况，肯定要报错
+                            collectError({
+                                type: "injectError",
+                                node: node,
+                                value: "引用存在未知错误: ",
+                                dst: nodeName
+                            })
                             break;
                     }
                 }
@@ -152,7 +185,7 @@ function mainCheck(source) {
                 var nodeName = path.node.name;
                 if (nodeName && allInject.obj.hasOwnProperty(nodeName)) {
                     var parentNode = path.parent;
-              
+
                     var whiteTypeMap = {
                         "ClassDeclaration": true,
                         "ExportSpecifier": true,
@@ -338,6 +371,38 @@ function mainCheck(source) {
         return {
             obj, arr
         }
+    }
+
+    function deepThisScope(scope) {
+        var blockType = scope && scope.block && scope.block.type;
+        if (scopeBlockFalseMap[blockType]) {
+            return false;
+        } else if (blockType == "ClassMethod") {
+            return true;
+        }
+        return deepThisScope(scope.parent);
+    }
+
+    function deepSelfScope(name, scope) {
+        if (scope) {
+            var bindings = scope.bindings || {};
+            if (bindings[name]) {
+                //找到引用
+                //暂时不判断这个引用的正确性。虽然可以做到~~
+                // console.log(":", name)
+                //
+                // console.log("::", Object.keys(bindings).join(","))
+                // console.log("::", bindings[name])
+                return true;
+            } else {
+                //作用域内没有引用，则上升一级
+                return deepSelfScope(name, scope.parent);
+            }
+        } else {
+            return false;
+        }
+
+
     }
 
 }
