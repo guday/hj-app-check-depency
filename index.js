@@ -1,47 +1,24 @@
-/**
- * 依赖检查：
- * 1、检查每个地方使用依赖时（通过inject注入的依赖），带上了this,that或者self。
- *      a、如果用其他变量代替this，会报出一个错误;
- *                  var scope = this;
- *                  scope.BannerService.update();
- *                    执行结果  =>
- *                    依赖似乎未被正确引用(this,that,self)
- *                    scope.BannerService.update();
- *      b、不检查this在多级函数下的使用正确性：
- * 2、本检查只适用依赖的三种调用方式
- *      a、通过"."调用：xxService.variableA，或者xxService.funcA()，
- *      b、通过"[]"调用：xxService[variableA]，或者xxService.[funcA]()，
- *      c、通过自身调用：xxService，或者xxService()，
- * 3、如果服务被赋值，且未引用，则报错
- *                  var newService = BannerService;
- *                  执行结果  =>
- *                  依赖缺少引用前缀
- *                  BannerService;
- *
- * 4、如果依赖被使用，但是没有注入，则报错
- *
- */
-
+var babylon = require("babylon");
+var traverse = require("babel-traverse").default;
+var generate = require("babel-generator").default;
+var t = require("babel-types");
 
 var path = require("path");
 var fs = require("fs");
 var appTools = require("hj-app-tools");
 
-var filterConfig = {
-    enclude: [
-
-    ]
-};
-//全局使用
 var that;
-var allServices = null;
-var newCodeService = null;
-var prefix = {
-    "this": true,
-    "that": true,
-    "self": true,
+var filterConfig = {
+    enclude: []
 };
-var providerArr;
+
+
+var injectArr = [];
+var oldInject = null;
+var providerArr = [];
+var defaultProviderObj = {};
+var prefix;
+var logPath;
 
 /**
  * 入口函数
@@ -58,18 +35,15 @@ module.exports = function (source) {
     if (this.query.exclude) {
         filterConfig.exclude = this.query.exclude
     }
-    providerArr = this.query.config && this.query.config.appAllServices || [];
-    var _prefix = this.query.config && this.query.config.prefix || {
-            "this": true,
-            "that": true,
-            "self": true,
-        };
-
-    prefix = {};
-    for (var i in _prefix) {
-        prefix[i] = true;
-        prefix["(" + i] = true;
-        prefix["[" + i] = true;
+    if (this.query.config) {
+        providerArr = this.query.config.appAllServices || [];
+        defaultProviderObj = this.query.config.defaultInjectServices || {};
+        logPath = this.query.config.logPath;
+        prefix = this.query.config.prefix || {
+                "this": true,
+                "that": true,
+                "self": true,
+            };
     }
 
     //按过滤进行处理
@@ -87,431 +61,284 @@ module.exports = function (source) {
  * @param source
  */
 function mainCheck(source) {
-    //思路：先搜集依赖，然后对每个依赖进行全文件的匹配。
-    var injectArr = _collectStaticInject(source);
+    //思路：
+    //  1、获取inject的依赖注入，除了this，得到集合A
+    //  2、获取所有依赖注入列表（静态），去除集合A，得到集合B，对不在A中的依赖，进行=>报错，汇集AB得到C
+    //  3、全局检查依赖引用
+    //  4、如果引用依赖在C中，认为检测到依赖。
+    //  5、检查：如果依赖前缀不是this,that,self其中之一，则=>报错
+    //  6、检查，如果依赖在A中，则正常，如果依赖在B中，则是未注入，=>报错
 
-    //app所有服务
-    var allServices = _getAllService();
-    var injectObj = arrToObj(injectArr);
-
-    //与文件中服务去重，找到未注入的
-    var unInjectServices = [];
-    for (var i in allServices) {
-        if (!injectObj[i]) {
-            unInjectServices.push(i);
-        }
-    }
-
-    _matchAllInject(source, injectArr, unInjectServices);
-
-}
-
-
-
-/**
- * 搜集静态注入
- * @param source
- * @returns {Array}
- * @private
- */
-function _collectStaticInject(source) {
-
-    source = source + "";
-    //搜集 静态注入
-    var regGetInject = /services\.inject\(.*?\)/g;
-    var injectArrTmp = source.match(regGetInject);
-
-    //注入格式：
-    // services.inject(this, 'cache', 'GLOBAL_CONSTANT','cgiService');
-    // this._initialize();
-
-    var injectArr = [];
-    var injectObj = {}; //注入去重
-    for (var i in injectArrTmp) {
-        var item = injectArrTmp[i] || "";
-
-        item = item + "";
-        // console.log(item);
-        var arr = item.split(/['",]/);
-        for (var j = 1; j < arr.length - 1; j++) {
-            var word = arr[j].trim();
-            if (word && !injectObj[word]) {
-                injectObj[word] = true;
-                injectArr.push(word);
-            }
-        }
-    }
-    // console.log(injectArr)
-    return injectArr;
-}
-
-function _matchAllInject(source, injectArr, unInjectServices) {
-    //思路： 将所有依赖组装成正则匹配字符串，一次性匹配，并在回调中处理。因为要用到回调，所以用replace
-    //      匹配出来的数据，检查正确性
-    //      区分出正确的，和可能不正确的，统统都输入到检查结果文件中。
-    //      检查结果文件与源文件同目录，新增.checkResult字段
-    //      文件中先显示错误信息，再显示剩下信息
-    //      对错误信息，log打印出来。
-
-    //思路： 上述是正向的依赖
-    //      反向依赖： 所有this. that. self.接下来的单词，遍历出来 找出不在注入里面的，同时在所有注入库里面的
-    //                也许就是有问题的，反馈出来
-
-    //  /([^\s]*\bbb\b[^\s]*)|([^\s]*\bcc\b[^\s]*)/g
-    //  /[^\s]*\$a[^\s]*/g
-
-    injectArr = injectArr || [];
-    var injectObj = {};
-    for (var i in injectArr) {
-        injectObj[injectArr[i]] = true;
-    }
-
-    var collectError = _collectError;
-    var reportError = _reportError;
-    var errorArr = [];
-    var errorMap = {
-        "1": "依赖似乎未被正确引用用(this,that,self)",
-        "2": "依赖缺少引用前缀",
-        "3": "似乎该服务未注入呢"
+    oldInject = getOldInject();
+    var newInject = {
+        arr: [],
+        obj: {}
     };
+    var allInject = {
+        arr: [],
+        obj: {}
+    }
 
-    if (injectArr.length > 0) {
-        var regMatchInject = injectArr.map(function (item) {
-            var str = item + "";
-            //特殊字符转换
-            str = str.replace("$", "\\$");
+    var ast = babylon.parse(source, {
+        sourceType: "module"
+    });
 
-            //正则包装  匹配所有包含该字符串的字段。 但是前缀不能为=
-            str = "([^\\s=,\\(]*" + str + "[^\\s,]*)";
-            return str;
-        }).join("|");
-
+    var errorArr = [];
 
 
+    var releavePath = path.relative(that.options.context, that.resourcePath);
+    if (logPath) {
+        console.log("==>", releavePath);
+    }
 
-        //生产最终正则
-        // var regMatchInject = regMatchArr.join("");
-        // var regMatchInject = /([^\s]*\bcache\b[^\s]*)|([^\s]*\bGLOBAL_CONSTANT\b[^\s]*)/g
+    // console.log(JSON.stringify(ast))
 
-        // console.log("info:", regMatchInject);
-        // regMatchInject = "([^\\s]*\\bcache\\b[^\\s]*)"
+    traverse(ast, {
+        //直接调用的表达式
+        CallExpression: {
+            enter: function (path) {
 
-        //去掉注释  //
-        source = source.replace(/\/\/.*/g, function (matchStr) {
-            // console.log("注释1: " + matchStr)
-            return "";
-        });
-        //去掉注释  /*  */
-        source = source.replace(/\/\*(\n|.)*?\*\//g, function (matchStr) {
-            // console.log("注释2: " + matchStr)
-            return "";
-        });
+                var node = path.node;
+                //搜集依赖注入
+                if (node.callee && node.callee.property && node.callee.property.name == "inject") {
+                    newInject = getNewInject(node, newInject);
+                    allInject = processAllInject(oldInject, newInject)
+                }
+            }
 
-        //对注入的服务，进行引用检查
-        source.replace(new RegExp(regMatchInject, "g"), function () {
-            var arg = arguments;
-            for (var i = 1, len = arg.length; i < len - 2; i++) {
-                var item = arg[i];
-                // console.log(item)
-                //取有效的匹配
-                if (item && (item = item.trim())) {
-                    var arr = item.split(".");
-                    // console.log(":", item)
-                    //处理.去调用子函数: this.serviceA.funcB
-                    if (arr.length > 1) {
-                        // console.log(i + ":" + item)
-                        var prefixStr = arr[0].trim();
-                        if (!prefix[prefixStr]) {
-                            // console.log(arr)
+        },
 
-                            //报错
+        MemberExpression: {
+            exit(path) {
+     
+                var node = path.node;
+                var nodeName = node.property && node.property.name;
+                if (allInject.obj.hasOwnProperty(nodeName)) {
+                    // console.log(nodeName)
+                    //匹配到依赖
+                    var beforeNode = node.object;
+                  
+                    switch (beforeNode.type) {
+                        case "ThisExpression":
+                            //this，大概率没问题
+                            break;
+                        case "MemberExpression":
+                            //多级引用，报错
                             collectError({
-                                dstStr: item,
-                                type: 1
+                                type: "injectError",
+                                node: node,
+                                value: "多级引用不对",
+                                dst: nodeName
                             })
-                        }
-
-                    } else {
-
-                        var prefixStr = "";
-                        //处理[]调用子函数: this.serviceA[funcB]
-                        arr = item.split("[");
-                        if (arr.length > 1) {
-                            prefixStr = arr[0];
-                        } else {
-                            //处理直接调用
-                            arr = item.split("(");
-                            if (arr.length > 1) {
-                                prefixStr = arr[0];
-                            } else {
-                                //处理单独引用
-                                arr = item.split(/'|"/);
-                                if (arr.length > 1) {
-                                    //字符串类型，不管了
-                                } else {
-                                    //单独引用，报错
-                                    // console.log(item)
-                                    collectError({
-                                        dstStr: item,
-                                        type: 2
-                                    })
-                                }
-                            }
-                        }
-
-                        if (prefixStr) {
-                            if (!prefix[prefixStr]) {
-                                //报错
-                                console.log("：", arr)
-                                // console.log("：", item)
+                            break;
+                        case "Identifier":
+                            var beforeNode = node.object;
+                            if (!prefix[beforeNode.name]) {
+                                //前缀有可能有问题，报告错误
                                 collectError({
-                                    dstStr: item,
-                                    type: 1
+                                    type: "injectError",
+                                    node: node,
+                                    value: "引用前缀不对: ",
+                                    dst: nodeName
                                 })
                             }
-                        }
-
+                            break;
+                    }
+                }
+            }
+        },
+        Identifier: {
+            exit(path){
+                var nodeName = path.node.name;
+                if (nodeName && allInject.obj.hasOwnProperty(nodeName)) {
+                    var parentNode = path.parent;
+              
+                    var whiteTypeMap = {
+                        "ClassDeclaration": true,
+                        "ExportSpecifier": true,
+                        "ImportSpecifier": true,
                     }
 
+                    if (whiteTypeMap.hasOwnProperty(parentNode.type)) {
+                        return;
+                    }
+                    if (parentNode.type != "MemberExpression") {
+                        //前缀有可能有问题，报告错误
+                        collectError({
+                            type: "injectError",
+                            node: parentNode,
+                            value: "注入需要前缀: ",
+                            dst: nodeName
+                        })
+                    } else if (parentNode.property !== path.node) {
+                        //前缀有可能有问题，报告错误
+                        collectError({
+                            type: "injectError",
+                            node: parentNode,
+                            value: "注入需要前缀: ",
+                            dst: nodeName
+                        })
+                    }
                 }
+
             }
-        });
-
-
-    }
-
-    if (unInjectServices.length > 0) {
-        var regUnInject = unInjectServices.map(function (item) {
-            var str = item + "";
-            //特殊字符转换
-            str = str.replace("$", "\\$");
-
-            //正则包装  匹配所有包含该字符串的字段。 但是前缀不能为=
-            str = "([\\n\\.\\s\\[=]{1}" + str + "[\\n\\.\\s\\[\\]]{1})";
-            return str;
-        }).join("|");
-
-        // console.log('unReg:', regUnInject);
-        //对未注入的服务，看下是否有引用，如果有引用，那必须报告 未注入错误
-        source.replace(new RegExp(regUnInject, "g"), function () {
-            var arg = arguments;
-            for (var i = 1, len = arg.length; i < len - 2; i++) {
-                var item = arg[i];
-                //取有效的匹配
-                if (item && (item = item.trim())) {
-                    // console.log('err:' + item)
-                    collectError({
-                        dstStr: item.split('.').join(" "),
-                        type: 3
-                    })
-                }
-            }
-        });
-    }
-
+        }
+    });
 
     reportError();
 
-
-    function _collectError(option) {
-        errorArr.push(option)
+    function collectError(option) {
+        errorArr.push(option);
     }
 
-    function _reportError() {
-        var type3Error = {};
-        var type3Arr = [];
-        if (errorArr.length > 0) {
-            var errorStr = "\n" + path.relative(that.options.context, that.resourcePath)
-                + "\n"
-            var arr = errorArr.filter(function (item, i) {
-                if(item.type == 3) {
-                    var str = item.dstStr.trim();
-                    if (!type3Error[str]) {
-                        type3Arr.push(str)
-                        type3Error[str] = true;
+    function reportError() {
+        var missInjectArr = [];
+        var injectErrArr = [];
+        errorArr.map(function (item, i) {
+            var str = "";
+            var type = item.type;
+            var node = item.node;
+            var value = item.value;
+            var dst = item.dst;
+
+            switch (type) {
+                case "injectError":
+                    str = value + ": ";
+                    var loc = node && node.loc;
+                    if (loc) {
+                        if (node) {
+                            var result = generate(node);
+                            str += result.code;
+                            str += " ;"
+                        }
+
+                        if (dst) {
+                            str += "匹配项: " + dst + " ;"
+                        }
+                        // if (dst) {
+                        //     str += "匹配项: " + JSON.stringify(node) + " ;"
+                        // }
+
+                        str += loc.start.line + " 行 "
+
                     }
+                    // injectErrArr.push(str);
+                    console.log(str)
+                    break;
+                case "missInOldInject":
+                    missInjectArr.push(value);
+                    break
+            }
 
-                    return false;
-                } else {
-                    return true;
-                }
+        });
+
+        if (injectErrArr.length > 0) {
+
+        }
+        if (missInjectArr.length > 0) {
+            var str = "全量注入列表维护: " + missInjectArr.join(", ")
+            console.log(str)
+        }
+    }
+
+    /**
+     * 从文件中取得注入列表
+     * @param node
+     * @param newInject 支持多次注入
+     * @returns {{arr: Array, obj: (obj|{})}}
+     */
+    function getNewInject(node, newInject) {
+        var args = node.arguments || [];
+        var arr = newInject.arr;
+        var obj = newInject.obj;
+        if (arr.length > 0) {
+            //多个依赖注入场景，可能会引发错误，需要提示，报告错误。
+            collectError({
+                type: "mutiInject",
+                node: node
             })
-             arr = arr.map(function (item, i) {
-                return (i + 1) + ": " + (errorMap[item.type] || "") + "\n" + item.dstStr;
-
-            });
-
-            errorStr += arr.join("\n") + "\n";
-
-
-            errorStr += type3Arr.map(function (item, i) {
-                return "'" + item  + "'";
-            }).join(", ");
-            showDepencyMsg(errorStr)
         }
-
-    }
-
-}
-
-/**
- * 显示错误
- * @param option
- */
-function showDepencyMsg(errorStr) {
-    // var type = option.type;
-    // var errorMap = {
-    //     "1": "依赖似乎未被正确引用用(this,that,self)",
-    //     "2": "依赖缺少引用前缀"
-    // };
-    // var errorStr = (errorMap[type] || "") + "\n" + option.dstStr;
-    console.log(errorStr);
-}
-
-/**
- * 搜集App的所有服务
- * App的所有服务包括两部分，一部分在老的代码中，一部分在中间代码中
- * @returns {*}
- * @private
- */
-function _getAllService() {
-    //已生成数据，则返回
-    if (allServices) {
-        return allServices;
-    }
-
-    //取得数据
-    var oldServices = _getOldCodeService();
-    var newServices = _getNewCodeService();
-
-    //合并去除空后返回
-    allServices = {};
-    for (var i in oldServices) {
-        if (oldServices[i]) {
-            allServices[i] = true;
-        }
-    }
-    for (var i in newServices) {
-        if (!allServices[i]) {
-            allServices[i] = true;
-        }
-    }
-    return allServices;
-}
-
-/**
- * 中间代码中获取所有依赖服务
- * @returns {*}
- * @private
- */
-function _getNewCodeService() {
-    if (newCodeService) {
-        return newCodeService;
-    }
-    newCodeService = {};
-    var newServiceAppFile = "./www_src/js/app.js";
-    var realPath = path.resolve(that.options.context, newServiceAppFile);
-    console.log(realPath)
-    var content = fs.readFileSync(realPath, 'utf8');
-
-    var regServices = /app\.service\s*?\(['"]{1}(.*?)['"]{1}.*?\)/g;
-    content.replace(regServices, function (matchStr, dst) {
-        dst = dst.trim();
-        if (dst) {
-            newCodeService[dst] = true;
-        }
-    });
-
-    return newCodeService;
-}
-
-/**
- * 老代码的services，写死到这里吧
- * @returns {{}}
- * @private
- */
-function _getOldCodeService() {
-
-    providerArr = providerArr || [];
-
-    var sObj = {};
-    for (var i in providerArr) {
-        sObj[providerArr[i]] = true
-    }
-    return sObj;
-}
-
-/**
- * 本函数，用于在app断点后，取得所有已经注入的依赖。
- */
-function getOldServiceDemo() {
-    //取得app的调用数组
-    var invekeQuere = app._invokeQueue;
-    var srcObj = {"factory": [], "service": []};
-    $.each(invekeQuere, function (i, item) {
-        if (srcObj[item[1]]) {
-            srcObj[item[1]].push(item[2])
-        }
-    })
-
-    //过滤出所有的服务
-    var srcServiceArr = srcObj.service;
-    var srcFactoryArr = srcObj.factory;
-    var srcAllProviderArr = srcServiceArr.concat(srcFactoryArr);
-    var srcAllProviderObj = {};
-
-    $.each(srcAllProviderArr, function (i, item) {
-        var name = item[0];
-        var depency = item[1];
-        if (depency.length > 0) {
-            //最后一个是函数，pop掉
-            var last = depency.pop();
-            if (typeof(last) == "string") {
-                depency.push(last);
+        for (var i in args) {
+            var item = args[i];
+            if (item.type == "StringLiteral" && item.value) {
+                if (!obj[item.value]) {
+                    arr.push(item.value);
+                    obj[item.value] = true;
+                } else {
+                    //重复注入，报告错误
+                    collectError({
+                        type: "mutiInject",
+                        node: item
+                    })
+                }
             }
         }
-        srcAllProviderObj[name] = {
-            name: name,
-            depency: depency
-        };
-    });
-
-    //循环检查依赖，找出所有用过的依赖
-    var dstProviderObj = {};
-    var keys = Object.keys(srcAllProviderObj);
-
-    var parseProviders = function (keys) {
-
-        for (var i in keys) {
-            var item = srcAllProviderObj[keys[i]];
-            dstProviderObj[keys[i]] = true;
-            //处理过的，不用重复处理
-            if (item && !item.parsed) {
-                item.parsed = true;
-                var name = item.name;
-
-                var depency = item.depency;
-
-
-                parseProviders(depency);
-            }
+        return {
+            arr, obj
         }
     }
-    //递归检查依赖
-    parseProviders(keys);
 
-    var dstProviderArr = Object.keys(dstProviderObj);
-    console.log("所有服务数据：")
-    console.log(JSON.stringify(dstProviderArr))
-}
+    /**
+     * 获取所有依赖（金泰）
+     * @returns {*}
+     */
+    function getOldInject() {
+        if (oldInject) {
+            return oldInject;
+        }
 
-function arrToObj(arr) {
-    var obj = {};
-    for (var i in arr) {
-        obj[arr[i]] = true;
+        var arr = [];
+        var obj = {};
+        for (var i in providerArr) {
+            var item = providerArr[i];
+            if (item) {
+                if (!obj[item]) {
+                    obj[item] = true;
+                    arr.push(item)
+                }
+            }
+        }
+        oldInject = {};
+        oldInject.obj = obj;
+        oldInject.arr = arr;
+        return oldInject;
+
     }
-    return obj
+
+    /**
+     * 处理处全量注入
+     * @param oldInject
+     * @param newInject
+     * @returns {{obj: {}, arr: Array}}
+     */
+    function processAllInject(oldInject, newInject) {
+        var oldObj = oldInject.obj;
+        var newObj = newInject.obj;
+        var arr = [];
+        var obj = {};
+
+        for (var i in oldObj) {
+            if (!newObj[i]) {
+                // arr.push(i);
+                obj[i] = "old";
+            }
+        }
+
+        for (var i in newObj) {
+            if (!oldObj[i] && !defaultProviderObj[i]) {
+                //新注入的列表中，在全量表中没有，也不在默认注入列表中，则报告提示错误
+                collectError({
+                    type: "missInOldInject",
+                    value: i
+                })
+            }
+            obj[i] = "new";
+        }
+
+        return {
+            obj, arr
+        }
+    }
 
 }
-
 
