@@ -93,7 +93,7 @@ function mainCheck(source) {
 
     //错误信息数组
     var errorArr = [];
-    
+
     var releavePath = path.relative(that.options.context, that.resourcePath);
     if (logPath) {
         console.log("==>", releavePath);
@@ -143,6 +143,16 @@ function mainCheck(source) {
                             //表达式调用作为最后一个，通常是正常的调用
                             //比如，注入X，因公this.X.get()
 
+                            // console.log("debug:" + allInject.obj[nodeName], nodeName)
+                            if (allInject.obj[nodeName] == "old") {
+                                //说明未在显式注入，或者默认注入中，则报告未注入错误
+                                collectError({
+                                    type: "injectError",
+                                    node: parentNode,
+                                    value: "似乎未注入呢",
+                                    dst: nodeName
+                                })
+                            }
 
                             //表达式调用的前缀
                             var beforeNode = parentNode.object;
@@ -377,6 +387,9 @@ function mainCheck(source) {
             if (!newObj[i]) {
                 // arr.push(i);
                 obj[i] = "old";
+            }
+            if (defaultProviderObj[i]) {
+                obj[i] = "default";
             }
         }
 
