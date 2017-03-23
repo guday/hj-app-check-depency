@@ -1,3 +1,6 @@
+/**
+ * 通过语法注入检查注入的正确性
+ */
 var babylon = require("babylon");
 var traverse = require("babel-traverse").default;
 var generate = require("babel-generator").default;
@@ -16,7 +19,6 @@ var filterConfig = {
 var oldInject = null;
 var providerArr = [];
 var defaultProviderObj = {};
-var prefix;
 var logPath;
 
 var scopeBlockFalseMap = {
@@ -47,11 +49,6 @@ module.exports = function (source) {
         providerArr = this.query.config.appAllServices || [];
         defaultProviderObj = this.query.config.defaultInjectServices || {};
         logPath = this.query.config.logPath;
-        prefix = this.query.config.prefix || {
-                "this": true,
-                "that": true,
-                "self": true,
-            };
     }
 
     //按过滤进行处理
@@ -77,23 +74,26 @@ function mainCheck(source) {
     //  5、检查：如果依赖前缀不是this,that,self其中之一，则=>报错
     //  6、检查，如果依赖在A中，则正常，如果依赖在B中，则是未注入，=>报错
 
+    //全量注入
     oldInject = getOldInject();
+    //文件注入
     var newInject = {
         arr: [],
         obj: {}
     };
+    //所有
     var allInject = {
         arr: [],
         obj: {}
-    }
+    };
 
     var ast = babylon.parse(source, {
         sourceType: "module"
     });
 
+    //错误信息数组
     var errorArr = [];
-
-
+    
     var releavePath = path.relative(that.options.context, that.resourcePath);
     if (logPath) {
         console.log("==>", releavePath);
@@ -117,94 +117,112 @@ function mainCheck(source) {
 
         },
 
-        MemberExpression: {
-            exit(path) {
-
-                var node = path.node;
-                var nodeName = node.property && node.property.name;
-                if (allInject.obj.hasOwnProperty(nodeName)) {
-                    // console.log(nodeName)
-                    //匹配到依赖
-                    var beforeNode = node.object;
-
-                    switch (beforeNode.type) {
-                        case "ThisExpression":
-                            //this，大概率没问题
-                            // if (nodeName == "HJactionLoading") {
-                            //     console.log("=>", JSON.stringify(node))
-                            //     console.log("=>", util.inspect(path.scope.bindings))
-                            // }
-                            //在作用域上向上一级遍历，直到找到根class
-                            if (!deepThisScope(path.scope)) {
-                                //this作用域并未指向根部，报错
-                                collectError({
-                                    type: "injectError",
-                                    node: node,
-                                    value: "this作用域不对",
-                                    dst: nodeName
-                                })
-                            }
-
-                            break;
-                        case "MemberExpression":
-                            //多级引用，报错
-                            collectError({
-                                type: "injectError",
-                                node: node,
-                                value: "多级引用不对",
-                                dst: nodeName
-                            })
-                            break;
-                        case "Identifier":
-                            var beforeName = node.object && node.object.name;
-
-                            if(!deepSelfScope(beforeName, path.scope)) {
-                                collectError({
-                                    type: "injectError",
-                                    node: node,
-                                    value: "引用前缀未申明: ",
-                                    dst: nodeName
-                                })
-                            }
-                            break;
-                        default :
-                            //这里是异常情况，肯定要报错
-                            collectError({
-                                type: "injectError",
-                                node: node,
-                                value: "引用存在未知错误: ",
-                                dst: nodeName
-                            })
-                            break;
-                    }
-                }
-            }
-        },
         Identifier: {
             exit(path){
                 var nodeName = path.node.name;
                 if (nodeName && allInject.obj.hasOwnProperty(nodeName)) {
+                    //匹配到注入的引用
                     var parentNode = path.parent;
+                    var parentPath = path.parentPath;
 
+                    //可忽略的白名单
                     var whiteTypeMap = {
                         "ClassDeclaration": true,
                         "ExportSpecifier": true,
                         "ImportSpecifier": true,
-                    }
+                    };
 
                     if (whiteTypeMap.hasOwnProperty(parentNode.type)) {
                         return;
                     }
-                    if (parentNode.type != "MemberExpression") {
-                        //前缀有可能有问题，报告错误
-                        collectError({
-                            type: "injectError",
-                            node: parentNode,
-                            value: "注入需要前缀: ",
-                            dst: nodeName
-                        })
-                    } else if (parentNode.property !== path.node) {
-                        //前缀有可能有问题，报告错误
+
+                    if (parentNode.type == "MemberExpression") {
+                        //表达式语法
+
+                        if(parentNode.property == path.node) {
+                            //表达式调用作为最后一个，通常是正常的调用
+                            //比如，注入X，因公this.X.get()
+
+
+                            //表达式调用的前缀
+                            var beforeNode = parentNode.object;
+
+                            switch (beforeNode.type) {
+                                case "ThisExpression":
+                                    //this，大概率没问题
+                                    // if (nodeName == "HJactionLoading") {
+                                    //     console.log("=>", JSON.stringify(node))
+                                    //     console.log("=>", util.inspect(path.scope.bindings))
+                                    // }
+                                    //在作用域上向上一级遍历，直到找到根class
+                                    if (!deepThisScope(parentPath.scope)) {
+                                        //this作用域并未指向根部，报错
+                                        collectError({
+                                            type: "injectError",
+                                            node: parentNode,
+                                            value: "this作用域不对",
+                                            dst: nodeName
+                                        })
+                                    }
+
+                                    break;
+                                case "MemberExpression":
+                                    //多级引用，虽然可能是正确的，先报错吧。 、
+                                    //比如注入X，使用scope.this.X.get()
+                                    collectError({
+                                        type: "injectError",
+                                        node: parentNode,
+                                        value: "多级引用不对",
+                                        dst: nodeName
+                                    })
+                                    break;
+                                case "Identifier":
+                                    var beforeName = beforeNode.name;
+
+                                    if(!deepSelfScope(beforeName, parentPath.scope)) {
+                                        collectError({
+                                            type: "injectError",
+                                            node: parentNode,
+                                            value: "引用前缀未申明: ",
+                                            dst: nodeName
+                                        })
+                                    }
+                                    break;
+                                default :
+                                    //这里是异常情况，肯定要报错
+                                    collectError({
+                                        type: "injectError",
+                                        node: parentNode,
+                                        value: "引用存在未知错误: ",
+                                        dst: nodeName
+                                    })
+                                    break;
+                            }
+
+
+
+                            // var anotherParent = path.parentPath.node.parent;
+                            // if (anotherParent.type == "MemberExpression") {
+                            //     //这是有问题的
+                            // }
+
+
+                        } else {
+
+                            //依赖并不是作为表达式的最后一个元素，报错，可能是不对的
+                            //比如注入X， 引用this.X.func.get()
+                            //前缀有可能有问题，报告错误
+                            collectError({
+                                type: "injectError",
+                                node: parentNode,
+                                value: "注入需要前缀: ",
+                                dst: nodeName
+                            })
+
+                        }
+
+                    } else {
+                        //如果无前缀，单个引用，则报告错误
                         collectError({
                             type: "injectError",
                             node: parentNode,
@@ -213,7 +231,6 @@ function mainCheck(source) {
                         })
                     }
                 }
-
             }
         }
     });
@@ -227,6 +244,7 @@ function mainCheck(source) {
     function reportError() {
         var missInjectArr = [];
         var injectErrArr = [];
+        var duplicateInjectArr = [];
         errorArr.map(function (item, i) {
             var str = "";
             var type = item.type;
@@ -260,13 +278,17 @@ function mainCheck(source) {
                     break;
                 case "missInOldInject":
                     missInjectArr.push(value);
-                    break
+                    break;
+                case "duplicateInject":
+                    duplicateInjectArr.push(value);
+                    break;
             }
 
         });
 
-        if (injectErrArr.length > 0) {
-
+        if (duplicateInjectArr.length > 0) {
+            var str = "重复注入: " + duplicateInjectArr.join(", ")
+            console.log(str)
         }
         if (missInjectArr.length > 0) {
             var str = "全量注入列表维护: " + missInjectArr.join(", ")
@@ -300,8 +322,9 @@ function mainCheck(source) {
                 } else {
                     //重复注入，报告错误
                     collectError({
-                        type: "mutiInject",
-                        node: item
+                        type: "duplicateInject",
+                        node: item,
+                        value: item.value
                     })
                 }
             }
