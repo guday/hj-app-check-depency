@@ -139,7 +139,7 @@ function mainCheck(source) {
                     if (parentNode.type == "MemberExpression") {
                         //表达式语法
 
-                        if(parentNode.property == path.node) {
+                        if (parentNode.property == path.node) {
                             //表达式调用作为最后一个，通常是正常的调用
                             //比如，注入X，因公this.X.get()
 
@@ -189,7 +189,7 @@ function mainCheck(source) {
                                 case "Identifier":
                                     var beforeName = beforeNode.name;
 
-                                    if(!deepSelfScope(beforeName, parentPath.scope)) {
+                                    if (!deepSelfScope(beforeName, parentPath.scope)) {
                                         collectError({
                                             type: "injectError",
                                             node: parentNode,
@@ -208,7 +208,6 @@ function mainCheck(source) {
                                     })
                                     break;
                             }
-
 
 
                             // var anotherParent = path.parentPath.node.parent;
@@ -255,12 +254,15 @@ function mainCheck(source) {
         var missInjectArr = [];
         var injectErrArr = [];
         var duplicateInjectArr = [];
+        var haveLog = false;
+
         errorArr.map(function (item, i) {
             var str = "";
             var type = item.type;
             var node = item.node;
             var value = item.value;
             var dst = item.dst;
+
 
             switch (type) {
                 case "injectError":
@@ -284,6 +286,7 @@ function mainCheck(source) {
 
                     }
                     // injectErrArr.push(str);
+                    logPathInfo();
                     console.log(str)
                     break;
                 case "missInOldInject":
@@ -297,12 +300,23 @@ function mainCheck(source) {
         });
 
         if (duplicateInjectArr.length > 0) {
+            logPathInfo();
             var str = "重复注入: " + duplicateInjectArr.join(", ")
             console.log(str)
         }
         if (missInjectArr.length > 0) {
+            logPathInfo();
             var str = "全量注入列表维护: " + missInjectArr.join(", ")
             console.log(str)
+        }
+
+        function logPathInfo() {
+            if (!haveLog && !logPath) {
+                haveLog = true;
+                var releavePath = path.relative(that.options.context, that.resourcePath);
+                console.log("==>", releavePath);
+            }
+
         }
     }
 
