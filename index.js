@@ -26,10 +26,7 @@ var scopeBlockFalseMap = {
     "ObjectMethod": true
 };
 
-// var scopeBlockFalseMap = {
-//     "ObjectMethod": true,
-//     "ObjectMethod": true,
-// }
+
 /**
  * 入口函数
  * @param source
@@ -106,7 +103,6 @@ function mainCheck(source) {
         //直接调用的表达式
         CallExpression: {
             enter: function (path) {
-
                 var node = path.node;
                 //搜集依赖注入
                 if (node.callee && node.callee.property && node.callee.property.name == "inject") {
