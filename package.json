@@ -1,7 +1,7 @@
 {
   "name": "hj-app-check-depency",
   "version": "1.0.6",
-  "description": "微众银行--火鸡项目--依赖检查",
+  "description": "angular项目--依赖检查",
   "main": "index.js",
   "scripts": {
     "test": "mocha tests/test.js"
