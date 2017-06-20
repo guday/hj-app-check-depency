@@ -6,6 +6,8 @@ var traverse = require("babel-traverse").default;
 var generate = require("babel-generator").default;
 var t = require("babel-types");
 
+var crypto = require('crypto')
+
 var path = require("path");
 var fs = require("fs");
 var util = require('util');
@@ -26,6 +28,12 @@ var scopeBlockFalseMap = {
     "ObjectMethod": true
 };
 
+var processConfig = false;
+var testFlag = false;
+var md5HashMap = {};
+var isInitMd5HashMap = false;
+var md5HashFilePath = './checkDepency/md5HashMap.json';
+var md5HashFileTimer = null;
 // var scopeBlockFalseMap = {
 //     "ObjectMethod": true,
 //     "ObjectMethod": true,
@@ -38,28 +46,61 @@ module.exports = function (source) {
     this.cacheable && this.cacheable();
     that = this;
 
-    //格式化配置
-    if (this.query.enclude) {
-        filterConfig.enclude = this.query.enclude
-    }
-    if (this.query.exclude) {
-        filterConfig.exclude = this.query.exclude
-    }
-    if (this.query.config) {
-        providerArr = this.query.config.appAllServices || [];
-        defaultProviderObj = this.query.config.defaultInjectServices || {};
-        logPath = this.query.config.logPath;
+    //map初始化
+    if (!isInitMd5HashMap) {
+        isInitMd5HashMap = true;
+        initMd5HashMap();
     }
 
-    //按过滤进行处理
-    var releavePath = path.relative(this.options.context, this.resourcePath);
-    if (appTools.filterWithConifg(releavePath, filterConfig)) {
-        //过滤到，则处理
-        mainCheck(source);
+    //配置初始化
+    if (!processConfig) {
+        processConfig = true;
+        if (this.query.enclude) {
+            filterConfig.enclude = this.query.enclude
+        }
+        if (this.query.exclude) {
+            filterConfig.exclude = this.query.exclude
+        }
+        if (this.query.config) {
+            providerArr = this.query.config.appAllServices || [];
+            defaultProviderObj = this.query.config.defaultInjectServices || {};
+            logPath = this.query.config.logPath;
+        }
     }
 
-    return source;
+    //异步处理
+    var someAsyncOperation =(source, callback)=> {
+        //
+        //按过滤进行处理
+        var releavePath = path.relative(this.options.context, this.resourcePath);
+        if (appTools.filterWithConifg(releavePath, filterConfig)) {
+            //过滤到，则处理
+
+            var md5Hash = md5(source);
+            if (md5HashMap[releavePath] == md5Hash) {
+                //无变化，不检查
+                callback(source)
+            } else {
+                var hasError = mainCheck(source);
+                md5HashMap[releavePath] = hasError ? "-1" : md5Hash;
+                console.log("check depency:",releavePath)
+                callback(source)
+            }
+        } else {
+            callback(source)
+        }
+
+    }
+
+    var callback = this.async();
+    someAsyncOperation(source, function(result) {
+        callback(null, result);
+        tryWriteHashFile();
+    });
+
 };
+
+
 
 /**
  * 检查的主入口
@@ -412,7 +453,7 @@ function mainCheck(source) {
     //     }
     // });
 
-    reportError();
+    return reportError();
 
     function collectError(option) {
         errorArr.push(option);
@@ -423,8 +464,10 @@ function mainCheck(source) {
         var injectErrArr = [];
         var duplicateInjectArr = [];
         var haveLog = false;
+        var hasError = false;
 
         errorArr.map(function (item, i) {
+            hasError = true;
             var str = "";
             var type = item.type;
             var node = item.node;
@@ -486,6 +529,8 @@ function mainCheck(source) {
             }
 
         }
+
+        return hasError;
     }
 
     /**
@@ -625,3 +670,49 @@ function mainCheck(source) {
 
 }
 
+/**
+ * 文本计算md5，处理变更
+ * @param str
+ * @returns {string|Buffer}
+ */
+function md5(str) {
+    return crypto.createHash('md5').update(str).digest("hex")
+}
+
+/**
+ * 初始化 filePath- md5 map
+ */
+function initMd5HashMap() {
+    //
+    var isExist = fs.existsSync(md5HashFilePath)
+    // console.log("isExist",isExist)
+    if (isExist) {
+        //读取
+        var jsonStr = fs.readFileSync(md5HashFilePath, 'utf8');
+        try {
+            md5HashMap = JSON.parse(jsonStr);
+        }catch (e) {
+            md5HashMap = {};
+        }
+    } else {
+        //初始化
+        md5HashMap = {};
+    }
+    // console.log(md5HashMap)
+}
+
+/**
+ * 将map写文件，长久保存
+ */
+function tryWriteHashFile() {
+    if (md5HashFileTimer) {
+        clearTimeout(md5HashFileTimer);
+        md5HashFileTimer = null;
+    }
+
+    md5HashFileTimer = setTimeout(function() {
+        var jsonStr = JSON.stringify(md5HashMap);
+        appTools.writeToFile(md5HashFilePath,jsonStr)
+        //
+    }, 800)
+}
