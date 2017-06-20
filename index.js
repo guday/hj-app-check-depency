@@ -83,7 +83,13 @@ module.exports = function (source) {
             } else {
                 var hasError = mainCheck(source);
                 md5HashMap[releavePath] = hasError ? "-1" : md5Hash;
-                console.log("check depency:",releavePath)
+                if (hasError) {
+                    md5HashMap[releavePath] = -1;
+                } else {
+                    md5HashMap[releavePath] = md5Hash;
+                    console.log("check depency:",releavePath)
+                }
+
                 callback(source)
             }
         } else {
