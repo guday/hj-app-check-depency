@@ -1,6 +1,6 @@
 {
   "name": "hj-app-check-depency",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "angular项目--依赖检查",
   "main": "index.js",
   "scripts": {
@@ -22,7 +22,7 @@
     "babel-types": "^6.23.0",
     "babylon": "^6.16.1",
     "chai": "2.2.0",
-    "hj-app-tools": "^1.0.1",
+    "hj-app-tools": "1.0.3",
     "mocha": "^3.2.0"
   }
 }
