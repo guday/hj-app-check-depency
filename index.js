@@ -12,6 +12,7 @@ var path = require("path");
 var fs = require("fs");
 var util = require('util');
 var appTools = require("hj-app-tools");
+var queryConfig = {};
 
 var that;
 var filterConfig = {
@@ -32,7 +33,7 @@ var processConfig = false;
 var testFlag = false;
 var md5HashMap = {};
 var isInitMd5HashMap = false;
-var md5HashFilePath = './checkDepency/md5HashMap.json';
+var md5HashFilePath = './.hjCheckResultTmp/hjAppCheckResult.json';
 var md5HashFileTimer = null;
 // var scopeBlockFalseMap = {
 //     "ObjectMethod": true,
@@ -46,11 +47,6 @@ module.exports = function (source) {
     this.cacheable && this.cacheable();
     that = this;
 
-    //map初始化
-    if (!isInitMd5HashMap) {
-        isInitMd5HashMap = true;
-        initMd5HashMap();
-    }
 
     //配置初始化
     if (!processConfig) {
@@ -66,10 +62,20 @@ module.exports = function (source) {
             defaultProviderObj = this.query.config.defaultInjectServices || {};
             logPath = this.query.config.logPath;
         }
+        queryConfig.enclude = this.query.enclude;
+        queryConfig.exclude = this.query.exclude;
+        queryConfig.config = this.query.config;
+    }
+
+
+    //map初始化
+    if (!isInitMd5HashMap) {
+        isInitMd5HashMap = true;
+        initMd5HashMap();
     }
 
     //异步处理
-    var someAsyncOperation =(source, callback)=> {
+    var someAsyncOperation = (source, callback) => {
         //
         //按过滤进行处理
         var releavePath = path.relative(this.options.context, this.resourcePath);
@@ -82,12 +88,11 @@ module.exports = function (source) {
                 callback(source)
             } else {
                 var hasError = mainCheck(source);
-                md5HashMap[releavePath] = hasError ? "-1" : md5Hash;
                 if (hasError) {
                     md5HashMap[releavePath] = -1;
                 } else {
                     md5HashMap[releavePath] = md5Hash;
-                    console.log("check depency:",releavePath)
+                    console.log("check depency:", releavePath)
                 }
 
                 callback(source)
@@ -99,13 +104,12 @@ module.exports = function (source) {
     }
 
     var callback = this.async();
-    someAsyncOperation(source, function(result) {
+    someAsyncOperation(source, function (result) {
         callback(null, result);
         tryWriteHashFile();
     });
 
 };
-
 
 
 /**
@@ -154,7 +158,7 @@ function mainCheck(source) {
     var classPathArr = [];
     traverse(ast, {
         ClassDeclaration: {
-            enter: function(path) {
+            enter: function (path) {
                 classPathArr.push(path);
             }
         }
@@ -690,14 +694,28 @@ function md5(str) {
  */
 function initMd5HashMap() {
     //
-    var isExist = fs.existsSync(md5HashFilePath)
+    var isExist = fs.existsSync(md5HashFilePath);
     // console.log("isExist",isExist)
     if (isExist) {
         //读取
         var jsonStr = fs.readFileSync(md5HashFilePath, 'utf8');
         try {
-            md5HashMap = JSON.parse(jsonStr);
-        }catch (e) {
+            //文件的json结构
+            var jsonObj = JSON.parse(jsonStr);
+
+            //检查结果
+            var fileResult = jsonObj.result || {};
+            md5HashMap = JSON.parse(JSON.stringify(fileResult));
+
+            //queryConfig
+            var config = jsonObj.config || {};
+
+            //对比上次的配置与本次的配置， 如果配置不一致，则全部重新检查
+            if (JSON.stringify(config) != JSON.stringify(queryConfig)) {
+                md5HashMap = {};
+            }
+        }
+        catch (e) {
             md5HashMap = {};
         }
     } else {
@@ -711,14 +729,16 @@ function initMd5HashMap() {
  * 将map写文件，长久保存
  */
 function tryWriteHashFile() {
+    // console.log("try",md5HashMap)
     if (md5HashFileTimer) {
         clearTimeout(md5HashFileTimer);
         md5HashFileTimer = null;
     }
 
-    md5HashFileTimer = setTimeout(function() {
-        var jsonStr = JSON.stringify(md5HashMap);
-        appTools.writeToFile(md5HashFilePath,jsonStr)
+    md5HashFileTimer = setTimeout(function () {
+        var result = md5HashMap;
+        var config = queryConfig;
+        appTools.writeToFile(md5HashFilePath, JSON.stringify({result, config}))
         //
     }, 800)
 }

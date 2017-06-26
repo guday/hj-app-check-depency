@@ -1,6 +1,6 @@
 {
   "name": "hj-app-check-depency",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "angular项目--依赖检查",
   "main": "index.js",
   "scripts": {
