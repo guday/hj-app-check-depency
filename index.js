@@ -84,15 +84,17 @@ module.exports = function (source) {
 
             var md5Hash = md5(source);
             if (md5HashMap[releavePath] == md5Hash) {
+                tryLogUnChangeNum();
                 //无变化，不检查
                 callback(source)
             } else {
+                tryLogChangedNum();
                 var hasError = mainCheck(source);
                 if (hasError) {
                     md5HashMap[releavePath] = -1;
                 } else {
                     md5HashMap[releavePath] = md5Hash;
-                    console.log("check depency:", releavePath)
+                    // console.log("check depency:", releavePath)
                 }
 
                 callback(source)
@@ -741,4 +743,65 @@ function tryWriteHashFile() {
         appTools.writeToFile(md5HashFilePath, JSON.stringify({result, config}))
         //
     }, 800)
+}
+
+
+var unChangeNum = 0;
+var unChangeTimer = null;
+var unChangeProcess = null;
+
+var changedNum = 0;
+var changedTimer = null;
+var changedProcess = null;
+
+/**
+ * 打印检测到的未变更数量，有个进度友好点
+ */
+function tryLogUnChangeNum() {
+    //
+    unChangeProcess = unChangeProcess || new appTools.ProgressMsg();
+    unChangeNum++;
+
+    if (unChangeTimer) {
+        clearTimeout(unChangeTimer);
+        unChangeTimer = null;
+    }
+
+    unChangeTimer = setTimeout(function () {
+        //
+        var isLast = !changedTimer;
+
+        unChangeProcess.logMsg('check-depency：检查到未变更文件:' + unChangeNum + " 这些文件不执行依赖检查                ");
+    }, 800);
+
+    if (unChangeNum % 8 == 0) {
+        unChangeProcess.logMsg('check-depency：检查到未变更文件:' + unChangeNum + " 这些文件不执行依赖检查                ")
+    }
+
+}
+
+/**
+ * 打印检测到的变更数量，有个进度友好点
+ */
+function tryLogChangedNum() {
+    //
+    changedProcess = changedProcess || new appTools.ProgressMsg();
+    changedNum++;
+
+    if (changedTimer) {
+        clearTimeout(changedTimer);
+        changedTimer = null;
+    }
+
+    changedTimer = setTimeout(function () {
+        //
+        var isLast = !unChangeTimer;
+
+        changedProcess.logMsg('check-depency：执行检查文件: ' + changedNum + "               ");
+    }, 800);
+
+    if (changedNum % 8 == 0) {
+        changedProcess.logMsg('check-depency：执行检查文件: ' + changedNum + "               ")
+    }
+
 }
