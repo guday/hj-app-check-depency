@@ -477,6 +477,7 @@ function mainCheck(source) {
         var duplicateInjectArr = [];
         var haveLog = false;
         var hasError = false;
+        var msgArr = [];
 
         errorArr.map(function (item, i) {
             hasError = true;
@@ -510,7 +511,7 @@ function mainCheck(source) {
                     }
                     // injectErrArr.push(str);
                     logPathInfo();
-                    console.log(str)
+                    logMsg(str)
                     break;
                 case "missInOldInject":
                     missInjectArr.push(value);
@@ -525,23 +526,36 @@ function mainCheck(source) {
         if (duplicateInjectArr.length > 0) {
             logPathInfo();
             var str = "重复注入: " + duplicateInjectArr.join(", ")
-            console.log(str)
+            logMsg(str)
         }
         if (missInjectArr.length > 0) {
             logPathInfo();
             var str = "全量注入列表维护: " + missInjectArr.join(", ")
-            console.log(str)
+            logMsg(str)
+        }
+
+
+        var emitter = that.emitError || that.emitWarning;
+        var message = msgArr.join("\n");
+        if (emitter) {
+            emitter(message)
+        } else {
+            console.log(message)
         }
 
         function logPathInfo() {
-            if (!haveLog && !logPath) {
-                haveLog = true;
-                var releavePath = path.relative(that.options.context, that.resourcePath);
-                console.log("==>", releavePath);
-            }
+            // if (!haveLog && !logPath) {
+            //     haveLog = true;
+            //     var releavePath = path.relative(that.options.context, that.resourcePath);
+            //     logMsg("==>", releavePath);
+            // }
 
         }
 
+        function logMsg(msg) {
+            //
+            msgArr.push("===> " + msg);
+        }
         return hasError;
     }
 
