@@ -535,13 +535,16 @@ function mainCheck(source) {
         }
 
 
-        var emitter = that.emitError || that.emitWarning;
-        var message = msgArr.join("\n");
-        if (emitter) {
-            emitter(message)
-        } else {
-            console.log(message)
+        if (msgArr.length > 0) {
+            var emitter = that.emitError || that.emitWarning;
+            var message = msgArr.join("\n");
+            if (emitter) {
+                emitter(message)
+            } else {
+                console.log(message)
+            }
         }
+
 
         function logPathInfo() {
             // if (!haveLog && !logPath) {
